@@ -143,7 +143,11 @@ public class FileOperationsImpl implements FileOperations {
       return getGCSConfig(cred.getGcpOauthToken(), cred.getExpirationTime(), credentialsEndpoint);
     } else if (cred.getAwsTempCredentials() != null) {
       return getS3Config(
-          path, cred.getAwsTempCredentials(), cred.getExpirationTime(), credentialsEndpoint);
+          path,
+          cred.getAwsTempCredentials(),
+          cred.getExpirationTime(),
+          credentialsEndpoint,
+          cred.getEndpointUrl());
     } else {
       // Cloud vend returned no recognized credential type. This should not happen for a cloud
       // scheme, so fail loudly rather than silently returning an empty (credential-less) config
@@ -189,14 +193,18 @@ public class FileOperationsImpl implements FileOperations {
       NormalizedURL path,
       AwsCredentials awsCredentials,
       Long expirationTime,
-      Optional<String> credentialsEndpoint) {
+      Optional<String> credentialsEndpoint,
+      String s3EndpointUrl) {
     // Use the configured region if present, otherwise discover it and cache it per bucket.
     // Discovery runs outside any map lock (get + putIfAbsent rather than computeIfAbsent): a bucket
     // whose discovery fails is never cached and so is re-probed on every request, and holding the
     // bin lock across HeadBucket would serialize those probes and pile request threads up on it.
     NormalizedURL storageBase = path.getStorageBase();
     String s3Region = s3BucketRegionMap.get(storageBase);
-    if (s3Region == null) {
+    if (s3Region == null && s3EndpointUrl != null) {
+      // An S3-compatible store has no AWS region to discover; any region signs requests for it.
+      s3Region = Region.US_EAST_1.id();
+    } else if (s3Region == null) {
       s3Region = discoverRegion(storageBase);
       s3BucketRegionMap.putIfAbsent(storageBase, s3Region);
     }
@@ -205,6 +213,10 @@ public class FileOperationsImpl implements FileOperations {
     config.put(S3FileIOProperties.SECRET_ACCESS_KEY, awsCredentials.getSecretAccessKey());
     config.put(S3FileIOProperties.SESSION_TOKEN, awsCredentials.getSessionToken());
     config.put(AwsClientProperties.CLIENT_REGION, s3Region);
+    if (s3EndpointUrl != null) {
+      config.put(S3FileIOProperties.ENDPOINT, s3EndpointUrl);
+      config.put(S3FileIOProperties.PATH_STYLE_ACCESS, "true");
+    }
     if (expirationTime != null) {
       // Without this, an Iceberg client cannot tell when the session it was handed dies, so it
       // neither renews ahead of the expiry nor treats the credential as expiring at all.

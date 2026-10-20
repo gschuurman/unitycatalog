@@ -62,6 +62,8 @@ public interface AwsCredentialGenerator {
     private final String staticAwsRoleArn;
     // Same region the STS client uses; used when the assumed role ARN does not carry a partition.
     private final Region awsRegion;
+    // Set when STS is served by an S3-compatible store rather than AWS.
+    private final boolean s3CompatibleEndpoint;
 
     public StsAwsCredentialGenerator(StsClientBuilder builder, S3StorageConfig config) {
       // Get STS region
@@ -87,7 +89,10 @@ public interface AwsCredentialGenerator {
         credentialsProvider = DefaultCredentialsProvider.create();
       }
 
-      this.stsClient = builder.region(region).credentialsProvider(credentialsProvider).build();
+      builder.region(region).credentialsProvider(credentialsProvider);
+      S3CompatibleEndpoint.of(config).ifPresent(builder::endpointOverride);
+      this.s3CompatibleEndpoint = S3CompatibleEndpoint.of(config).isPresent();
+      this.stsClient = builder.build();
       this.staticAwsRoleArn = config.getAwsRoleArn();
       this.awsRegion = region;
     }
@@ -105,6 +110,9 @@ public interface AwsCredentialGenerator {
       String awsPolicy =
           AwsPolicyGenerator.generatePolicy(
               ctx.getPrivileges(), ctx.getLocations(), roleArn, awsRegion);
+      if (s3CompatibleEndpoint) {
+        awsPolicy = S3CompatibleEndpoint.withoutKmsStatements(awsPolicy);
+      }
       String roleSessionName = "uc-%s".formatted(UUID.randomUUID());
 
       AssumeRoleRequest.Builder roleRequestBuilder =

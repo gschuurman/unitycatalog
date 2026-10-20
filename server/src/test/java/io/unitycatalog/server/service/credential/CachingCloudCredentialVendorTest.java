@@ -139,7 +139,9 @@ public class CachingCloudCredentialVendorTest {
   /** The number of cloud vends across all three clouds. */
   private int vends() {
     return Stream.of(aws, azure, gcp)
-        .mapToInt(vendor -> mockingDetails(vendor).getInvocations().size())
+        .flatMap(vendor -> mockingDetails(vendor).getInvocations().stream())
+        .filter(invocation -> invocation.getMethod().getName().startsWith("vend"))
+        .mapToInt(invocation -> 1)
         .sum();
   }
 

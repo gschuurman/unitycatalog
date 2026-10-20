@@ -2655,6 +2655,11 @@ components:
           $ref: '#/components/schemas/AzureUserDelegationSAS'
         gcp_oauth_token:
           $ref: '#/components/schemas/GcpOauthToken'
+        endpoint_url:
+          description: |
+            Endpoint of the S3-compatible store the AWS temporary credentials are valid against.
+            Absent when the credentials are for AWS S3 itself. Clients should use path-style access.
+          type: string
         expiration_time:
           description: |
             Server time when the credential will expire, in epoch milliseconds.
