@@ -1,0 +1,236 @@
+name: Daily Unity Catalog rebase
+
+# Keeps s3-compatible-endpoint as [latest unitycatalog/unitycatalog main] + [every fork commit],
+# and publishes the server image built from it to GHCR.
+#
+# The fork is a short stack of commits on top of upstream (S3-compatible credential vending, see
+# docs/server/s3-compatible.md on that branch). There is no base marker: the branch only ever
+# holds upstream history plus the fork stack, so `git merge-base HEAD <upstream tip>` is the
+# upstream commit the fork currently sits on. Every run: fetch the upstream tip, and if it moved,
+# replay the *entire* old-base..HEAD range onto it. After a clean replay, verify no line the fork
+# added went missing (verify_rebase.py), run the credential tests and the RustFS end-to-end
+# check, force-push with a lease on the head this run started from, and push the image. On
+# conflict, content loss or a test failure, the branch and image are left untouched and an issue
+# is filed.
+#
+# This workflow lives on the `ci` branch (the repository's default branch, so the schedule runs),
+# not in s3-compatible-endpoint. The replay excludes `.github`, because GitHub refuses pushes that
+# change workflow files when they come from the default GITHUB_TOKEN. Upstream itself edits
+# .github/workflows now and then, so a push can still be refused for that reason: the image is
+# published anyway and the run only warns. The branch then stays on its old base until it is
+# rebased by hand (see the issue template below); the next runs keep replaying from there.
+
+on:
+  schedule:
+    - cron: '17 3 * * *' # daily 03:17 UTC
+  workflow_dispatch:
+    inputs:
+      force-image:
+        description: Build and push the image even if upstream has not moved.
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  issues: write
+  packages: write
+
+env:
+  UPSTREAM_URL: https://github.com/unitycatalog/unitycatalog.git
+  UPSTREAM_BRANCH: main
+  BRANCH: s3-compatible-endpoint
+  IMAGE: ghcr.io/${{ github.repository_owner }}/unitycatalog
+  RUSTFS_IMAGE: rustfs/rustfs:1.0.3@sha256:9ca9559533b537d10482fe923288b676ad08f92a7069d9a17327fbae3cab688b
+  ISSUE_TITLE: 'Daily Unity Catalog rebase failed'
+
+defaults:
+  run:
+    working-directory: uc
+
+jobs:
+  rebase:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout CI scripts
+        uses: actions/checkout@v4
+        with:
+          path: ci
+
+      - name: Checkout fork branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BRANCH }}
+          path: uc
+          fetch-depth: 0
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch upstream tip
+        # Not shallow: the push has to send every upstream commit between the old and the new
+        # base, and GitHub refuses pushes from a shallow history.
+        run: git fetch --no-tags "$UPSTREAM_URL" "$UPSTREAM_BRANCH"
+
+      - name: Check for upstream movement
+        id: check
+        run: |
+          new_base=$(git rev-parse FETCH_HEAD)
+          old_base=$(git merge-base HEAD FETCH_HEAD)
+          echo "old_head=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "old_base=$old_base" >> "$GITHUB_OUTPUT"
+          echo "new_base=$new_base" >> "$GITHUB_OUTPUT"
+          if [ "$old_base" = "$new_base" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Fork commits on ${old_base:0:12}:"
+          git log --oneline "$old_base..HEAD"
+
+      - name: Re-apply the full fork commit range onto new tip
+        if: steps.check.outputs.changed == 'true'
+        id: rebase
+        run: |
+          old_base="${{ steps.check.outputs.old_base }}"
+          new_base="${{ steps.check.outputs.new_base }}"
+          git diff "$old_base" HEAD -- . ":(exclude).github" > /tmp/fork.diff
+          # commits that only touched .github drop out of the series
+          git format-patch "$old_base..HEAD" --stdout -- . ":(exclude).github" > /tmp/fork.patch
+          git checkout --detach "$new_base"
+          # --keep-non-patch: keep subject prefixes such as "[Server]"
+          if git am --keep-non-patch /tmp/fork.patch; then
+            echo "conflict=false" >> "$GITHUB_OUTPUT"
+          else
+            git am --abort
+            echo "conflict=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Verify no fork content was silently dropped
+        if: steps.check.outputs.changed == 'true' && steps.rebase.outputs.conflict == 'false'
+        id: verify
+        run: |
+          if python3 ../ci/.github/scripts/verify_rebase.py /tmp/fork.diff; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Decide whether to build
+        id: build
+        run: |
+          if [ "${{ steps.verify.outputs.ok }}" = "true" ] || [ "${{ inputs.force-image }}" = "true" -a "${{ steps.check.outputs.changed }}" = "false" ]; then
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-java@v4
+        if: steps.build.outputs.needed == 'true'
+        with:
+          java-version: '17'
+          distribution: zulu
+          cache: sbt
+          cache-dependency-path: uc/build.sbt
+
+      - name: Credential tests and package
+        if: steps.build.outputs.needed == 'true'
+        id: tests
+        run: >-
+          ./build/sbt -info javafmtCheckAll
+          'server/testOnly io.unitycatalog.server.service.credential.*
+          io.unitycatalog.server.service.credential.aws.*
+          io.unitycatalog.server.utils.ServerPropertiesTest
+          io.unitycatalog.server.utils.FileOperationsTest'
+          package
+
+      - name: RustFS end-to-end
+        if: steps.build.outputs.needed == 'true'
+        id: e2e
+        run: |
+          docker run -d --name rustfs -p 9000:9000 \
+            -e RUSTFS_ACCESS_KEY=rustfsadmin -e RUSTFS_SECRET_KEY=rustfsadmin "$RUSTFS_IMAGE"
+          for _ in $(seq 1 30); do curl -s -o /dev/null http://127.0.0.1:9000/ && break; sleep 1; done
+          python3 -m pip install --quiet boto3==1.35.0
+          dev/s3-compatible/rustfs-vending-test.sh
+
+      - name: RustFS log
+        if: failure() && steps.e2e.outcome == 'failure'
+        run: docker logs rustfs 2>&1 | tail -50
+
+      - name: Push rebased branch
+        if: steps.check.outputs.changed == 'true' && steps.verify.outputs.ok == 'true'
+        run: |
+          # the replay rewrote the branch; only replace the head this run started from
+          if ! out=$(git push --force-with-lease="refs/heads/$BRANCH:${{ steps.check.outputs.old_head }}" \
+              origin "HEAD:$BRANCH" 2>&1); then
+            echo "$out"
+            if grep -q "without .workflows. permission" <<<"$out"; then
+              echo "::warning::Push refused: upstream changed .github/workflows in this range. Image is still published; rebase $BRANCH by hand to move the branch."
+            else
+              exit 1
+            fi
+          fi
+
+      - name: Image tags
+        if: steps.build.outputs.needed == 'true'
+        id: tags
+        run: |
+          version=$(sed -E 's/.*"(.*)".*/\1/' version.sbt)
+          base=$(git merge-base HEAD FETCH_HEAD)
+          {
+            echo "tags<<EOF"
+            echo "$IMAGE:latest"
+            echo "$IMAGE:${version}-s3.$(date -u +%Y%m%d)"
+            echo "$IMAGE:upstream-${base:0:12}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+        if: steps.build.outputs.needed == 'true'
+
+      - uses: docker/login-action@v3
+        if: steps.build.outputs.needed == 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - uses: docker/build-push-action@v6
+        if: steps.build.outputs.needed == 'true'
+        with:
+          context: uc
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ steps.check.outputs.changed == 'true' && 'rebased' || steps.check.outputs.old_head }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: File issue on conflict, content loss or test failure
+        if: failure() || steps.rebase.outputs.conflict == 'true' || steps.verify.outputs.ok == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          REASON: ${{ steps.rebase.outputs.conflict == 'true' && 'produced conflicts' || steps.verify.outputs.ok == 'false' && 'applied cleanly but dropped fork content (see job log for the missing lines)' || 'failed (see the run log)' }}
+        run: |
+          body="Replaying the fork commit range (${{ steps.check.outputs.old_base }}..$BRANCH) onto $UPSTREAM_BRANCH@${{ steps.check.outputs.new_base }} $REASON. \`$BRANCH\` and the image were left untouched. Run: $RUN_URL
+
+          Rebase manually:
+
+          \`\`\`
+          git fetch $UPSTREAM_URL $UPSTREAM_BRANCH
+          git rebase FETCH_HEAD $BRANCH
+          # resolve conflicts / restore dropped content, then run dev/s3-compatible/rustfs-vending-test.sh
+          git push --force-with-lease origin $BRANCH
+          \`\`\`"
+          number=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+            --search "\"$ISSUE_TITLE\" in:title" --json number --jq '.[0].number')
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$ISSUE_TITLE" --body "$body"
+          fi
