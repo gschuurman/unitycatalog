@@ -7,7 +7,9 @@ import io.unitycatalog.server.model.AwsIamRoleResponse;
 import io.unitycatalog.server.service.credential.CredentialContext;
 import io.unitycatalog.server.utils.NormalizedURL;
 import io.unitycatalog.server.utils.ServerProperties;
+import java.net.URI;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
 import lombok.Getter;
@@ -141,5 +143,16 @@ public class AwsCredentialVendor {
               context.getStorageBase(), storageBase -> createPerBucketCredentialGenerator(config));
     }
     return generator.generate(context);
+  }
+
+  /**
+   * The S3-compatible endpoint the credential for {@code context} is valid against, picked the same
+   * way {@link #vendAwsCredentials} picks its generator. Empty for AWS itself.
+   */
+  public Optional<URI> endpointFor(CredentialContext context) {
+    if (context.getCredentialDAO().isPresent()) {
+      return S3CompatibleEndpoint.of(awsS3MasterRoleConfig);
+    }
+    return S3CompatibleEndpoint.of(perBucketS3Configs.get(context.getStorageBase()));
   }
 }

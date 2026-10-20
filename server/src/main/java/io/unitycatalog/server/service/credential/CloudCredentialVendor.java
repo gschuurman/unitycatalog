@@ -67,6 +67,9 @@ public class CloudCredentialVendor {
                     .accessKeyId(awsSessionCredentials.accessKeyId())
                     .secretAccessKey(awsSessionCredentials.secretAccessKey())
                     .sessionToken(awsSessionCredentials.sessionToken()));
+    awsCredentialVendor
+        .endpointFor(context)
+        .ifPresent(endpoint -> temporaryCredentials.endpointUrl(endpoint.toString()));
 
     // Explicitly set the expiration time for the temporary credentials if it's a non-static
     // credential. For static credential, the expiration time can be nullable.
