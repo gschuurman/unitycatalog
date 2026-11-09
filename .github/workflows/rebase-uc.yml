@@ -100,7 +100,10 @@ jobs:
           git format-patch "$old_base..HEAD" --stdout -- . ":(exclude).github" > /tmp/fork.patch
           git checkout --detach "$new_base"
           # --keep-non-patch: keep subject prefixes such as "[Server]"
-          if git am --keep-non-patch /tmp/fork.patch; then
+          # -3: fall back to a three-way merge when upstream changed lines next to a fork change;
+          # plain `git am` refused those (2026-11-09) although `git rebase` merged them cleanly.
+          # The verify step below still checks that the fork's content survived unchanged.
+          if git am -3 --keep-non-patch /tmp/fork.patch; then
             echo "conflict=false" >> "$GITHUB_OUTPUT"
           else
             git am --abort
@@ -142,7 +145,9 @@ jobs:
           'server/testOnly io.unitycatalog.server.service.credential.*
           io.unitycatalog.server.service.credential.aws.*
           io.unitycatalog.server.utils.ServerPropertiesTest
-          io.unitycatalog.server.utils.FileOperationsTest'
+          io.unitycatalog.server.utils.FileOperationsTest
+          io.unitycatalog.server.sdk.schema.SdkSchemaCRUDTest
+          io.unitycatalog.server.sdk.tables.SdkTableCRUDTest'
           package
 
       - name: RustFS end-to-end
