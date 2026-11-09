@@ -853,6 +853,15 @@ public class TableRepository {
             throw new BaseException(
                 ErrorCode.TABLE_ALREADY_EXISTS, "Table already exists: " + fullName);
           }
+          RepositoryUtils.rejectCaseVariant(
+              session,
+              "TableInfoDAO",
+              "schemaId",
+              schemaId,
+              createTable.getName(),
+              null,
+              ErrorCode.TABLE_ALREADY_EXISTS,
+              "Table");
           TableType tableType = Objects.requireNonNull(createTable.getTableType());
           // `tableUUID` is the table's primary key. The shape is uniform across the three
           // creatable branches (external, managed, metric view); the only divergence is the
@@ -1335,6 +1344,15 @@ public class TableRepository {
             throw new BaseException(
                 ErrorCode.TABLE_ALREADY_EXISTS, "Table already exists: " + newName);
           }
+          RepositoryUtils.rejectCaseVariant(
+              session,
+              "TableInfoDAO",
+              "schemaId",
+              schemaId,
+              newName,
+              tableInfoDAO.getId(),
+              ErrorCode.TABLE_ALREADY_EXISTS,
+              "Table");
           tableInfoDAO.setName(newName);
           tableInfoDAO.setUpdatedAt(new Date());
           tableInfoDAO.setUpdatedBy(callerId);

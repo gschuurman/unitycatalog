@@ -49,6 +49,15 @@ public class StagingTableRepository {
     if (existingTable != null) {
       throw new BaseException(ErrorCode.TABLE_ALREADY_EXISTS, "Table already exists: " + tableName);
     }
+    RepositoryUtils.rejectCaseVariant(
+        session,
+        "TableInfoDAO",
+        "schemaId",
+        schemaId,
+        tableName,
+        null,
+        ErrorCode.TABLE_ALREADY_EXISTS,
+        "Table");
     // Also ensure that no staging table exists at the same location. This is almost impossible as
     // the generated path contains a newly generated random UUID. But still check for it anyway.
     StagingTableDAO existingStagingTableAtLocation =

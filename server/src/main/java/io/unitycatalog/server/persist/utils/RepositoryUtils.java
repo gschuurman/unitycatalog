@@ -188,6 +188,55 @@ public class RepositoryUtils {
     return query.uniqueResultOptional();
   }
 
+  /**
+   * Refuses {@code name} when a sibling's name differs from it only in case. Names keep their case,
+   * but query engines that lowercase identifiers (Trino) cannot tell such twins apart and fail on
+   * both. An exact match is left to the caller's own "already exists" check.
+   *
+   * @param entity the DAO entity, e.g. {@code "SchemaInfoDAO"}
+   * @param parentField the entity's parent id field ({@code "catalogId"}, {@code "schemaId"}), or
+   *     null for catalogs
+   * @param selfId the id of the object being renamed, so it can change only the case of its own
+   *     name; null on create
+   */
+  public static void rejectCaseVariant(
+      Session session,
+      String entity,
+      String parentField,
+      UUID parentId,
+      String name,
+      UUID selfId,
+      ErrorCode errorCode,
+      String kind) {
+    String hql =
+        "SELECT name FROM "
+            + entity
+            + " WHERE lower(name) = lower(:name) AND name <> :name"
+            + (parentField == null ? "" : " AND " + parentField + " = :parentId")
+            + (selfId == null ? "" : " AND id <> :selfId");
+    Query<String> query = session.createQuery(hql, String.class);
+    query.setParameter("name", name);
+    if (parentField != null) {
+      query.setParameter("parentId", parentId);
+    }
+    if (selfId != null) {
+      query.setParameter("selfId", selfId);
+    }
+    query.setMaxResults(1);
+    query
+        .uniqueResultOptional()
+        .ifPresent(
+            existing -> {
+              throw new BaseException(
+                  errorCode,
+                  kind
+                      + " "
+                      + existing
+                      + " already exists; names that differ only in case are not allowed: "
+                      + name);
+            });
+  }
+
   public record CatalogAndSchemaDaoOpt(
       Optional<CatalogInfoDAO> catalogInfoDAO, Optional<SchemaInfoDAO> schemaInfoDAO) {}
 

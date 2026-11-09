@@ -76,6 +76,15 @@ public class CatalogRepository {
                 ErrorCode.CATALOG_ALREADY_EXISTS,
                 "Catalog already exists: " + createCatalog.getName());
           }
+          RepositoryUtils.rejectCaseVariant(
+              session,
+              "CatalogInfoDAO",
+              null,
+              null,
+              createCatalog.getName(),
+              null,
+              ErrorCode.CATALOG_ALREADY_EXISTS,
+              "Catalog");
           CatalogInfoDAO catalogInfoDAO = CatalogInfoDAO.from(catalogInfo);
           PropertyDAO.from(catalogInfo.getProperties(), catalogInfoDAO.getId(), Constants.CATALOG)
               .forEach(session::persist);
@@ -166,6 +175,17 @@ public class CatalogRepository {
             throw new BaseException(
                 ErrorCode.CATALOG_ALREADY_EXISTS,
                 "Catalog already exists: " + updateCatalog.getNewName());
+          }
+          if (updateCatalog.getNewName() != null) {
+            RepositoryUtils.rejectCaseVariant(
+                session,
+                "CatalogInfoDAO",
+                null,
+                null,
+                updateCatalog.getNewName(),
+                catalogInfoDAO.getId(),
+                ErrorCode.CATALOG_ALREADY_EXISTS,
+                "Catalog");
           }
           if (updateCatalog.getNewName() != null) {
             catalogInfoDAO.setName(updateCatalog.getNewName());

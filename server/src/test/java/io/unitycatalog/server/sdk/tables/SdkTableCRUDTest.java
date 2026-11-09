@@ -100,6 +100,36 @@ public class SdkTableCRUDTest extends BaseTableCRUDTest {
   }
 
   @Test
+  public void testTableNamesDifferingOnlyInCaseAreRefused() throws Exception {
+    // Trino lowercases identifiers and fails on both twins, so a twin is never created.
+    createTestingTable(
+        "MyTable",
+        TableType.EXTERNAL,
+        Optional.of(Files.createTempDirectory(testDirectoryRoot, "table").toString()),
+        tableOperations);
+    String twinLocation = Files.createTempDirectory(testDirectoryRoot, "table").toString();
+    assertThatExceptionOfType(Exception.class)
+        .isThrownBy(
+            () ->
+                createTestingTable(
+                    "mytable", TableType.EXTERNAL, Optional.of(twinLocation), tableOperations))
+        .withMessageContaining("differ only in case");
+    assertThatExceptionOfType(ApiException.class)
+        .isThrownBy(
+            () ->
+                localTablesApi.createStagingTable(
+                    new CreateStagingTable()
+                        .catalogName(TestUtils.CATALOG_NAME)
+                        .schemaName(TestUtils.SCHEMA_NAME)
+                        .name("MYTABLE")))
+        .satisfies(
+            ex ->
+                assertThat(ex.getCode())
+                    .isEqualTo(ErrorCode.TABLE_ALREADY_EXISTS.getHttpStatus().code()))
+        .withMessageContaining("differ only in case");
+  }
+
+  @Test
   public void testListTablesWithNoNextPageTokenShouldReturnNull() throws Exception {
     TableInfo testingTable =
         createTestingTable(

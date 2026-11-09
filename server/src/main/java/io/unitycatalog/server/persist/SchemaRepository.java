@@ -62,7 +62,7 @@ public class SchemaRepository {
               repositories
                   .getCatalogRepository()
                   .getCatalogDaoOrThrow(session, createSchema.getCatalogName());
-          validateSchemaNotExistInCatalog(session, catalogDAO, createSchema.getName());
+          validateSchemaNotExistInCatalog(session, catalogDAO, createSchema.getName(), null);
           Long createTime = System.currentTimeMillis();
           UUID schemaId = UUID.randomUUID();
           SchemaInfo schemaInfo =
@@ -145,14 +145,23 @@ public class SchemaRepository {
   }
 
   private void validateSchemaNotExistInCatalog(
-      Session session, String catalogName, String schemaName) {
+      Session session, String catalogName, String schemaName, UUID selfId) {
     CatalogInfoDAO catalogDAO =
         repositories.getCatalogRepository().getCatalogDaoOrThrow(session, catalogName);
-    validateSchemaNotExistInCatalog(session, catalogDAO, schemaName);
+    validateSchemaNotExistInCatalog(session, catalogDAO, schemaName, selfId);
   }
 
   private void validateSchemaNotExistInCatalog(
-      Session session, CatalogInfoDAO catalogDao, String schemaName) {
+      Session session, CatalogInfoDAO catalogDao, String schemaName, UUID selfId) {
+    RepositoryUtils.rejectCaseVariant(
+        session,
+        "SchemaInfoDAO",
+        "catalogId",
+        catalogDao.getId(),
+        schemaName,
+        selfId,
+        ErrorCode.SCHEMA_ALREADY_EXISTS,
+        "Schema");
     RepositoryUtils.getSchemaDaoOpt(session, catalogDao.getId(), schemaName)
         .ifPresent(
             schemaInfoDAO -> {
@@ -283,7 +292,8 @@ public class SchemaRepository {
           SchemaInfoDAO schemaInfoDAO = getSchemaDaoOrThrow(session, fullName);
           if (updateSchema.getNewName() != null) {
             String catalogName = splitSchemaFullName(fullName).catalogName();
-            validateSchemaNotExistInCatalog(session, catalogName, updateSchema.getNewName());
+            validateSchemaNotExistInCatalog(
+                session, catalogName, updateSchema.getNewName(), schemaInfoDAO.getId());
           }
           if (updateSchema.getComment() == null
               && updateSchema.getNewName() == null

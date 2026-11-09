@@ -150,4 +150,42 @@ public abstract class BaseSchemaCRUDTest extends BaseSchemaCRUDTestEnv {
                     TestUtils.CATALOG_NEW_NAME + "." + TestUtils.SCHEMA_NAME))
         .isInstanceOf(Exception.class);
   }
+
+  @Test
+  public void testNamesDifferingOnlyInCaseAreRefused() throws ApiException {
+    // Trino lowercases identifiers and fails on both twins, so a twin is never created.
+    catalogOperations.createCatalog(new CreateCatalog().name("CaseCat"));
+    assertThatThrownBy(() -> catalogOperations.createCatalog(new CreateCatalog().name("casecat")))
+        .isInstanceOf(ApiException.class)
+        .hasMessageContaining("CaseCat")
+        .hasMessageContaining("differ only in case");
+
+    schemaOperations.createSchema(new CreateSchema().name("Sales").catalogName("CaseCat"));
+    assertThatThrownBy(
+            () ->
+                schemaOperations.createSchema(
+                    new CreateSchema().name("sales").catalogName("CaseCat")))
+        .isInstanceOf(ApiException.class)
+        .hasMessageContaining("differ only in case");
+
+    schemaOperations.createSchema(new CreateSchema().name("Other").catalogName("CaseCat"));
+    assertThatThrownBy(
+            () ->
+                schemaOperations.updateSchema("CaseCat.Other", new UpdateSchema().newName("SALES")))
+        .isInstanceOf(ApiException.class)
+        .hasMessageContaining("differ only in case");
+
+    // An object may change only the case of its own name.
+    assertThat(
+            schemaOperations
+                .updateSchema("CaseCat.Sales", new UpdateSchema().newName("SALES"))
+                .getName())
+        .isEqualTo("SALES");
+    assertThat(
+            catalogOperations
+                .updateCatalog("CaseCat", new UpdateCatalog().newName("CASECAT"))
+                .getName())
+        .isEqualTo("CASECAT");
+    catalogOperations.deleteCatalog("CASECAT", Optional.of(true));
+  }
 }
